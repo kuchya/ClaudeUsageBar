@@ -20,23 +20,9 @@ live gauge in your menu bar so you always know how much of your **5-hour session
 and **7-day weekly** allowance you've used — the same numbers as Claude Code's
 `/usage` panel, without opening a terminal.
 
-```
-  ▍▍  S 91% 2h34m   W 52% 4d16h      ← % + reset countdown, always visible
-   │
-   └─ click ▾
-      ┌────────────────────────────────────┐
-      │  Session (5h):  91%                 │
-      │      resets in 2h 34m  (Tue 01:59)  │
-      │  Weekly (7d):   52%                 │
-      │      resets in 4d 16h  (Sat 15:29)  │
-      │  ──────────────────────────────     │
-      │  Updated 11:25:11 PM                │
-      │  ✓ Notify at 80% / 90%              │
-      │  ✓ Start at Login                   │
-      │  Refresh Now                    ⌘R  │
-      │  Quit                           ⌘Q  │
-      └────────────────────────────────────┘
-```
+<div align="center">
+<img src="assets/screenshot.png" width="560" alt="ClaudeUsageBar menu bar and dropdown" />
+</div>
 
 ## ✨ Features
 

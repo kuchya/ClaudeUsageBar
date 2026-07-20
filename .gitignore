@@ -1,0 +1,12 @@
+# Build output
+ClaudeUsageBar.app/
+*.app
+
+# Generated artifacts (rebuilt by build.sh / make_icon.sh)
+AppIcon.icns
+
+# macOS
+.DS_Store
+
+# Editor / misc
+*.swp

@@ -21,7 +21,7 @@ and **7-day weekly** allowance you've used — the same numbers as Claude Code's
 `/usage` panel, without opening a terminal.
 
 ```
-  ▍▍  S 91%  W 52%      ← always visible in your menu bar
+  ▍▍  S 91% 2h34m   W 52% 4d16h      ← % + reset countdown, always visible
    │
    └─ click ▾
       ┌────────────────────────────────────┐
@@ -41,6 +41,7 @@ and **7-day weekly** allowance you've used — the same numbers as Claude Code's
 ## ✨ Features
 
 - **Live session + weekly percentages** right in the menu bar, refreshed every 60s.
+- **Inline reset countdowns** — each percentage carries its own timer (e.g. `S 91% 2h34m   W 52% 4d16h`).
 - **Color-coded** — green → 🟠 orange (≥70%) → 🔴 red (≥90%) so a glance is enough.
 - **Mini dual-bar gauge** icon (left = session, right = weekly).
 - **Threshold notifications** — get pinged when you cross 80%, 90%, or 100%.
@@ -59,7 +60,7 @@ and **7-day weekly** allowance you've used — the same numbers as Claude Code's
 **Install (about 30 seconds)**
 
 ```bash
-git clone https://github.com/<your-username>/ClaudeUsageBar.git
+git clone https://github.com/kuchya/ClaudeUsageBar.git
 cd ClaudeUsageBar
 ./build.sh
 open ./ClaudeUsageBar.app

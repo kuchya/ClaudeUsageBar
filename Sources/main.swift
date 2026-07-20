@@ -184,6 +184,19 @@ func colorFor(_ pct: Double) -> NSColor {
     return .labelColor
 }
 
+/// Compact reset countdown for the menu bar, e.g. "1h20m", "2d3h", "45m".
+func shortCountdown(_ date: Date?) -> String? {
+    guard let date = date else { return nil }
+    var secs = Int(date.timeIntervalSinceNow)
+    if secs <= 0 { return "now" }
+    let d = secs / 86400; secs %= 86400
+    let h = secs / 3600;  secs %= 3600
+    let m = secs / 60
+    if d > 0 { return "\(d)d\(h)h" }
+    if h > 0 { return "\(h)h\(m)m" }
+    return "\(m)m"
+}
+
 /// A compact two-bar gauge (left = session, right = weekly) for the menu bar.
 func gaugeImage(session: Double?, weekly: Double?) -> NSImage {
     let size = NSSize(width: 16, height: 15)
@@ -278,16 +291,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             maybeNotify("Weekly", w)
             let title = NSMutableAttributedString()
             let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
-            func seg(_ label: String, _ pct: Double?) -> NSAttributedString {
-                let text = pct == nil ? "\(label) —" : "\(label) \(Int(pct!.rounded()))%"
-                return NSAttributedString(string: text, attributes: [
+            func seg(_ label: String, _ bucket: Bucket?) -> NSAttributedString {
+                let out = NSMutableAttributedString()
+                let pct = bucket?.utilization
+                let head = pct == nil ? "\(label) —" : "\(label) \(Int(pct!.rounded()))%"
+                out.append(NSAttributedString(string: head, attributes: [
                     .font: font,
                     .foregroundColor: colorFor(pct ?? 0),
-                ])
+                ]))
+                if let cd = shortCountdown(bucket?.resetsAt) {
+                    out.append(NSAttributedString(string: " \(cd)", attributes: [
+                        .font: font,
+                        .foregroundColor: NSColor.secondaryLabelColor,
+                    ]))
+                }
+                return out
             }
-            title.append(seg("S", s))
-            title.append(NSAttributedString(string: "  ", attributes: [.font: font]))
-            title.append(seg("W", w))
+            title.append(seg("S", u.session))
+            title.append(NSAttributedString(string: "   ", attributes: [.font: font]))
+            title.append(seg("W", u.weekly))
             button.attributedTitle = title
         } else {
             button.image = nil

@@ -21,7 +21,7 @@ and **7-day weekly** allowance you've used — the same numbers as Claude Code's
 `/usage` panel, without opening a terminal.
 
 <div align="center">
-<img src="assets/screenshot.png" width="560" alt="ClaudeUsageBar menu bar and dropdown" />
+<img src="assets/screenshot.png" width="420" alt="ClaudeUsageBar menu bar and dropdown" />
 </div>
 
 ## ✨ Features

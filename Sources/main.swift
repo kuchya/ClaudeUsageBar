@@ -300,9 +300,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     .foregroundColor: colorFor(pct ?? 0),
                 ]))
                 if let cd = shortCountdown(bucket?.resetsAt) {
+                    // Opaque adaptive color + lighter weight/size: legible in light *and*
+                    // dark menu bars (secondaryLabelColor is translucent and washes out).
+                    let cdFont = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize - 1.5,
+                                                                  weight: .regular)
                     out.append(NSAttributedString(string: " \(cd)", attributes: [
-                        .font: font,
-                        .foregroundColor: NSColor.secondaryLabelColor,
+                        .font: cdFont,
+                        .foregroundColor: NSColor.labelColor,
                     ]))
                 }
                 return out

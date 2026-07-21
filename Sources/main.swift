@@ -17,7 +17,13 @@ enum Config {
     static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
     static let oauthBeta = "oauth-2025-04-20"
     static let keychainService = "Claude Code-credentials"
-    static let refreshInterval: TimeInterval = 60          // seconds between polls
+    // The /api/oauth/usage endpoint is itself rate-limited, so poll gently.
+    // Countdowns still tick every displayTick locally (no network) because
+    // resets_at is an absolute time — utilization changes slowly anyway.
+    static let refreshInterval: TimeInterval = 300         // base seconds between NETWORK polls
+    static let displayTick: TimeInterval = 60              // local re-render cadence (no network)
+    static let maxBackoff: TimeInterval = 1800             // cap error backoff at 30 min
+    static let requestTimeout: TimeInterval = 15
     static let warnThreshold = 70.0                        // % -> orange
     static let critThreshold = 90.0                        // % -> red
     static let notifyThresholds = [80.0, 90.0, 100.0]      // alert when crossed upward
@@ -109,7 +115,24 @@ struct Usage {
     let fetchedAt: Date
 }
 
-enum UsageError: Error { case http(Int, String), transport(String), parse(String) }
+enum UsageError: Error {
+    case http(Int, String, retryAfter: TimeInterval?)
+    case transport(String)
+    case parse(String)
+}
+
+/// Parse a Retry-After header (delta seconds or HTTP date) into seconds from now.
+func parseRetryAfter(_ http: HTTPURLResponse) -> TimeInterval? {
+    guard let v = http.value(forHTTPHeaderField: "Retry-After")?
+        .trimmingCharacters(in: .whitespaces) else { return nil }
+    if let secs = Double(v) { return max(0, secs) }
+    let fmt = DateFormatter()
+    fmt.locale = Locale(identifier: "en_US_POSIX")
+    fmt.timeZone = TimeZone(identifier: "GMT")
+    fmt.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+    if let d = fmt.date(from: v) { return max(0, d.timeIntervalSinceNow) }
+    return nil
+}
 
 func parseBucket(_ dict: [String: Any]?) -> Bucket? {
     guard let dict = dict else { return nil }
@@ -133,7 +156,7 @@ func parseBucket(_ dict: [String: Any]?) -> Bucket? {
 func fetchUsage(_ creds: Credentials) async -> Result<Usage, UsageError> {
     var req = URLRequest(url: Config.usageURL)
     req.httpMethod = "GET"
-    req.timeoutInterval = 20
+    req.timeoutInterval = Config.requestTimeout
     req.setValue("Bearer \(creds.accessToken)", forHTTPHeaderField: "Authorization")
     req.setValue(Config.oauthBeta, forHTTPHeaderField: "anthropic-beta")
     req.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -146,7 +169,8 @@ func fetchUsage(_ creds: Credentials) async -> Result<Usage, UsageError> {
         }
         guard http.statusCode == 200 else {
             let body = String(data: data, encoding: .utf8) ?? ""
-            return .failure(.http(http.statusCode, String(body.prefix(200))))
+            return .failure(.http(http.statusCode, String(body.prefix(200)),
+                                  retryAfter: parseRetryAfter(http)))
         }
         let json = try? JSONSerialization.jsonObject(with: data)
         let usage = Usage(
@@ -230,9 +254,13 @@ func gaugeImage(session: Double?, weekly: Double?) -> NSImage {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
-    private var timer: Timer?
-    private var lastError: String?
+    private var displayTimer: Timer?
     private var lastUsage: Usage?
+    private var noDataError: String?       // nothing to show yet -> blank bar
+    private var transientError: String?    // have stale data -> keep showing it, warn in menu
+    private var backoff: TimeInterval = Config.refreshInterval
+    private var nextFetch = Date()         // when the next network poll is due
+    private var fetching = false
     private var notifiedLevel: [String: Double] = ["Session": 0, "Weekly": 0]
     private var notifyEnabled = UserDefaults.standard.object(forKey: "notifyEnabled") as? Bool ?? true
 
@@ -241,43 +269,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "Claude …"
         rebuildMenu()
-        refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: Config.refreshInterval, repeats: true) { [weak self] _ in
-            self?.refresh()
+        performFetch()
+        // One light timer: re-render locally every tick (countdowns), fetch only when due.
+        displayTimer = Timer.scheduledTimer(withTimeInterval: Config.displayTick, repeats: true) { [weak self] _ in
+            self?.tick()
         }
     }
 
+    private func tick() {
+        render()   // countdowns recompute from absolute resets_at — no network needed
+        if !fetching && Date() >= nextFetch { performFetch() }
+    }
+
+    /// Menu "Refresh Now": clear backoff and poll immediately.
     @objc func refresh() {
+        backoff = Config.refreshInterval
+        nextFetch = Date()
+        performFetch()
+    }
+
+    private func scheduleNext(after secs: TimeInterval) {
+        nextFetch = Date().addingTimeInterval(max(secs, 5))
+    }
+
+    private func performFetch() {
+        guard !fetching else { return }
         switch Keychain.readClaudeCredentials() {
         case .failure(let msg):
-            lastError = msg
-            lastUsage = nil
+            setError(msg)
+            scheduleNext(after: Config.refreshInterval)
             render()
         case .success(let creds):
             if let exp = creds.expiresAt, exp < Date() {
-                lastError = "Token expired — run Claude Code once to refresh."
+                setError("Token expired — run Claude Code once to refresh.")
+                scheduleNext(after: Config.refreshInterval)
                 render()
                 return
             }
+            fetching = true
             Task {
                 let result = await fetchUsage(creds)
                 await MainActor.run {
+                    self.fetching = false
                     switch result {
                     case .success(let u):
                         self.lastUsage = u
-                        self.lastError = nil
+                        self.noDataError = nil
+                        self.transientError = nil
+                        self.backoff = Config.refreshInterval
+                        self.scheduleNext(after: Config.refreshInterval)
                     case .failure(let e):
-                        switch e {
-                        case .http(401, _): self.lastError = "Auth rejected (401) — run Claude Code to refresh."
-                        case .http(let c, let b): self.lastError = "HTTP \(c): \(b)"
-                        case .transport(let m): self.lastError = "Network: \(m)"
-                        case .parse(let m): self.lastError = m
-                        }
+                        self.handleFetchError(e)
                     }
                     self.render()
                 }
             }
         }
+    }
+
+    /// Route an error to blank-bar vs keep-stale, and decide the next retry delay.
+    private func handleFetchError(_ e: UsageError) {
+        var msg: String
+        var wait: TimeInterval
+        switch e {
+        case .http(401, _, _):
+            msg = "Auth rejected (401) — run Claude Code to refresh."
+            wait = Config.refreshInterval           // a keychain re-read next cycle may fix it
+        case .http(429, _, let ra):
+            msg = "Rate limited — backing off."
+            wait = max(ra ?? 0, min(backoff, Config.maxBackoff))
+            backoff = min(backoff * 2, Config.maxBackoff)
+        case .http(let c, let b, let ra):
+            msg = "HTTP \(c): \(b)"
+            wait = max(ra ?? 0, min(backoff, Config.maxBackoff))
+            backoff = min(backoff * 2, Config.maxBackoff)
+        case .transport(let m):
+            msg = "Network: \(m)"
+            wait = min(backoff, Config.maxBackoff)
+            backoff = min(backoff * 2, Config.maxBackoff)
+        case .parse(let m):
+            msg = m
+            wait = Config.refreshInterval
+        }
+        setError(msg)
+        scheduleNext(after: wait)
+    }
+
+    /// Keep showing stale data if we have it; otherwise the bar goes to ⚠︎.
+    private func setError(_ msg: String) {
+        if lastUsage != nil { transientError = msg; noDataError = nil }
+        else { noDataError = msg; transientError = nil }
     }
 
     private func render() {
@@ -322,6 +403,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ])
         }
         rebuildMenu()
+    }
+
+    /// "just now" / "3m ago" / "2h ago" for the freshness line.
+    private func shortAgo(_ date: Date) -> String {
+        let s = Int(max(0, Date().timeIntervalSince(date)))
+        if s < 45 { return "just now" }
+        if s < 3600 { return "\(s / 60)m ago" }
+        if s < 86400 { return "\(s / 3600)h ago" }
+        return "\(s / 86400)d ago"
     }
 
     /// Fire a notification when a bucket crosses a threshold upward; reset after the window resets.
@@ -387,8 +477,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             menu.addItem(.separator())
             let fmt = DateFormatter(); fmt.timeStyle = .medium
-            addRow("Updated \(fmt.string(from: u.fetchedAt))")
-        } else if let err = lastError {
+            addRow("Updated \(fmt.string(from: u.fetchedAt))  (\(shortAgo(u.fetchedAt)))")
+            if let err = transientError {
+                let retry = shortCountdown(nextFetch).map { " · retrying in \($0)" } ?? ""
+                addRow("⚠︎ \(err)\(retry)", color: .systemOrange)
+            }
+        } else if let err = noDataError {
             addRow("⚠︎ \(err)", color: .systemRed)
         } else {
             addRow("Loading…")

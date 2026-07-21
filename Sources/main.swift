@@ -103,16 +103,31 @@ enum Keychain {
 
 // MARK: - Usage model
 
-struct Bucket {
+struct Bucket: Codable {
     let utilization: Double     // 0–100
     let resetsAt: Date?
 }
 
-struct Usage {
+struct Usage: Codable {
     let session: Bucket?        // five_hour
     let weekly: Bucket?         // seven_day
     let weeklyOpus: Bucket?     // seven_day_opus
     let fetchedAt: Date
+}
+
+/// Persist the last successful reading so it survives relaunches — a cold start
+/// that immediately gets rate-limited can still show the last known values.
+enum Store {
+    static let key = "lastUsage.v1"
+    static func save(_ u: Usage) {
+        let enc = JSONEncoder(); enc.dateEncodingStrategy = .iso8601
+        if let d = try? enc.encode(u) { UserDefaults.standard.set(d, forKey: key) }
+    }
+    static func load() -> Usage? {
+        guard let d = UserDefaults.standard.data(forKey: key) else { return nil }
+        let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
+        return try? dec.decode(Usage.self, from: d)
+    }
 }
 
 enum UsageError: Error {
@@ -268,7 +283,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "Claude …"
-        rebuildMenu()
+        // Restore the last reading so the bar shows values immediately, even offline.
+        lastUsage = Store.load()
+        primeNotifyState()
+        render()
         performFetch()
         // One light timer: re-render locally every tick (countdowns), fetch only when due.
         displayTimer = Timer.scheduledTimer(withTimeInterval: Config.displayTick, repeats: true) { [weak self] _ in
@@ -314,6 +332,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     switch result {
                     case .success(let u):
                         self.lastUsage = u
+                        Store.save(u)
+                        self.maybeNotify("Session", u.session?.utilization)
+                        self.maybeNotify("Weekly", u.weekly?.utilization)
                         self.noDataError = nil
                         self.transientError = nil
                         self.backoff = Config.refreshInterval
@@ -368,8 +389,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let w = u.weekly?.utilization
             button.image = gaugeImage(session: s, weekly: w)
             button.imagePosition = .imageLeading
-            maybeNotify("Session", s)
-            maybeNotify("Weekly", w)
             let title = NSMutableAttributedString()
             let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
             func seg(_ label: String, _ bucket: Bucket?) -> NSAttributedString {
@@ -412,6 +431,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if s < 3600 { return "\(s / 60)m ago" }
         if s < 86400 { return "\(s / 3600)h ago" }
         return "\(s / 86400)d ago"
+    }
+
+    /// Seed notification levels from restored data so we don't re-alert on launch.
+    private func primeNotifyState() {
+        func level(_ b: Bucket?) -> Double {
+            Config.notifyThresholds.filter { (b?.utilization ?? 0) >= $0 }.max() ?? 0
+        }
+        notifiedLevel["Session"] = level(lastUsage?.session)
+        notifiedLevel["Weekly"] = level(lastUsage?.weekly)
     }
 
     /// Fire a notification when a bucket crosses a threshold upward; reset after the window resets.

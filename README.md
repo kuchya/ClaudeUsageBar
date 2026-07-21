@@ -28,7 +28,8 @@ and **7-day weekly** allowance you've used — the same numbers as Claude Code's
 
 - **Live session + weekly percentages** right in the menu bar.
 - **Inline reset countdowns** — each percentage carries its own timer (e.g. `S 91% 2h34m   W 52% 4d16h`), ticking down every minute locally.
-- **Gentle on the API** — refreshes utilization every ~5 min, honours `Retry-After`, and backs off automatically if rate-limited (so it never blanks out; it just keeps showing the last reading).
+- **Gentle on the API** — refreshes utilization every ~5 min, honours `Retry-After`, and backs off automatically if rate-limited.
+- **Always shows the last reading** — values are cached to disk, so it never blanks out; even a rate-limited cold start shows the last known numbers (with an "Updated 8m ago" freshness note).
 - **Color-coded** — green → 🟠 orange (≥70%) → 🔴 red (≥90%) so a glance is enough.
 - **Mini dual-bar gauge** icon (left = session, right = weekly).
 - **Threshold notifications** — get pinged when you cross 80%, 90%, or 100%.

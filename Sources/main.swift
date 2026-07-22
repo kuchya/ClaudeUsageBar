@@ -223,6 +223,16 @@ func colorFor(_ pct: Double) -> NSColor {
     return .labelColor
 }
 
+/// Gauge fill color. Unlike `colorFor`, the normal range uses an opaque green
+/// instead of the adaptive `labelColor` — the gauge is a baked bitmap that
+/// doesn't track the menu-bar appearance, so an adaptive color would bake to
+/// black and disappear on a dark menu bar.
+func gaugeColor(_ pct: Double) -> NSColor {
+    if pct >= Config.critThreshold { return .systemRed }
+    if pct >= Config.warnThreshold { return .systemOrange }
+    return .systemGreen
+}
+
 /// Compact reset countdown for the menu bar, e.g. "1h20m", "2d3h", "45m".
 func shortCountdown(_ date: Date?) -> String? {
     guard let date = date else { return nil }
@@ -245,10 +255,10 @@ func gaugeImage(session: Double?, weekly: Double?) -> NSImage {
     let usableH = size.height - padY * 2
     let bars: [(Double?, CGFloat)] = [(session, 1), (weekly, 1 + barW + gap)]
     for (pct, x) in bars {
-        // Track
+        // Track — a fixed neutral gray, visible on both light and dark menu bars.
         let track = NSBezierPath(roundedRect: NSRect(x: x, y: padY, width: barW, height: usableH),
                                  xRadius: 1.5, yRadius: 1.5)
-        NSColor.tertiaryLabelColor.withAlphaComponent(0.4).setFill()
+        NSColor(white: 0.55, alpha: 0.55).setFill()
         track.fill()
         // Fill
         let p = max(0, min(100, pct ?? 0)) / 100.0
@@ -256,7 +266,7 @@ func gaugeImage(session: Double?, weekly: Double?) -> NSImage {
         if h > 0 {
             let fill = NSBezierPath(roundedRect: NSRect(x: x, y: padY, width: barW, height: h),
                                     xRadius: 1.5, yRadius: 1.5)
-            colorFor(pct ?? 0).setFill()
+            gaugeColor(pct ?? 0).setFill()
             fill.fill()
         }
     }

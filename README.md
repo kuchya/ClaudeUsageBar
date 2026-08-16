@@ -103,6 +103,10 @@ This endpoint **does not consume any of your usage** — checking your meter is 
 - **Refresh interval / thresholds / colors** — tweak the `Config` block at the top of
   [`Sources/main.swift`](Sources/main.swift), then `./build.sh`.
 
+## 📝 Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the full version history.
+
 ## ⚠️ Disclaimer
 
 This is an **unofficial** community project and is **not affiliated with or endorsed by

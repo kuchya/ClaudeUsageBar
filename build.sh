@@ -19,7 +19,12 @@ fi
 cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 echo "→ Compiling Swift (release)…"
-swiftc -O -o "$APP/Contents/MacOS/$BIN_NAME" \
+# Pin the deployment target so the Mach-O min-OS is stamped correctly. Without
+# this, newer Swift toolchains can stamp a min-OS *higher* than the running
+# macOS, causing Launch Services error -10825 ("can't use this version…").
+ARCH="$(uname -m)"                       # arm64 or x86_64
+swiftc -O -target "${ARCH}-apple-macos12.0" \
+    -o "$APP/Contents/MacOS/$BIN_NAME" \
     -framework AppKit -framework Foundation -framework Security \
     Sources/main.swift
 

@@ -15,6 +15,9 @@ import UserNotifications
 
 enum Config {
     static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+    static let tokenURL = URL(string: "https://platform.claude.com/v1/oauth/token")!
+    static let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"   // Claude Code OAuth client
+    static let refreshLead: TimeInterval = 120     // refresh this many seconds before expiry
     static let oauthBeta = "oauth-2025-04-20"
     static let keychainService = "Claude Code-credentials"
     // The /api/oauth/usage endpoint is itself rate-limited, so poll gently.
@@ -68,14 +71,32 @@ struct Credentials {
     let expiresAt: Date?
 }
 
+/// The full credential blob, kept so we can refresh the token and write it back.
+struct StoredCreds {
+    var raw: [String: Any]       // full top-level JSON object as stored
+    var innerKey: String?        // "claudeAiOauth" wrapper key, or nil if fields are top-level
+    var accessToken: String
+    var refreshToken: String?
+    var expiresAt: Date?
+    var scopes: [String]
+}
+
+struct RefreshResult {
+    let accessToken: String
+    let refreshToken: String?
+    let expiresAt: Date?
+}
+
 enum Keychain {
-    static func readClaudeCredentials() -> Result<Credentials, String> {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Config.keychainService,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
+    private static var baseQuery: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: Config.keychainService]
+    }
+
+    static func read() -> Result<StoredCreds, String> {
+        var query = baseQuery
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         if status == errSecItemNotFound {
@@ -87,17 +108,85 @@ enum Keychain {
         guard status == errSecSuccess, let data = item as? Data else {
             return .failure("Keychain error (\(status)).")
         }
-        let json = try? JSONSerialization.jsonObject(with: data)
-        guard let tokenAny = findValue(json, key: "accessToken"),
-              let token = tokenAny as? String, !token.isEmpty else {
+        guard let top = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return .failure("Couldn't parse credentials.")
+        }
+        var inner = top
+        var innerKey: String? = nil
+        if let wrapped = top["claudeAiOauth"] as? [String: Any] {
+            inner = wrapped; innerKey = "claudeAiOauth"
+        }
+        guard let token = inner["accessToken"] as? String, !token.isEmpty else {
             return .failure("Couldn't find accessToken in credentials.")
         }
         var expires: Date? = nil
-        if let expMs = asDouble(findValue(json, key: "expiresAt")) {
-            // Stored as epoch milliseconds.
-            expires = Date(timeIntervalSince1970: expMs / 1000.0)
+        if let expMs = asDouble(inner["expiresAt"]) {
+            expires = Date(timeIntervalSince1970: expMs / 1000.0)   // stored as epoch ms
         }
-        return .success(Credentials(accessToken: token, expiresAt: expires))
+        return .success(StoredCreds(
+            raw: top, innerKey: innerKey,
+            accessToken: token,
+            refreshToken: inner["refreshToken"] as? String,
+            expiresAt: expires,
+            scopes: (inner["scopes"] as? [String]) ?? []))
+    }
+
+    /// Write refreshed tokens back into the same item (value-only update preserves
+    /// the ACL, so both this app and Claude Code stay authorized and in sync).
+    @discardableResult
+    static func write(_ creds: StoredCreds) -> Bool {
+        var top = creds.raw
+        var inner: [String: Any] = creds.innerKey.flatMap { top[$0] as? [String: Any] } ?? top
+        inner["accessToken"] = creds.accessToken
+        if let rt = creds.refreshToken { inner["refreshToken"] = rt }
+        if let e = creds.expiresAt { inner["expiresAt"] = e.timeIntervalSince1970 * 1000.0 }
+        if let k = creds.innerKey { top[k] = inner } else { top = inner }
+        guard let data = try? JSONSerialization.data(withJSONObject: top) else { return false }
+        let status = SecItemUpdate(baseQuery as CFDictionary,
+                                   [kSecValueData as String: data] as CFDictionary)
+        return status == errSecSuccess
+    }
+
+    /// Exchange the refresh token for a fresh access token (OAuth refresh grant).
+    static func refresh(_ creds: StoredCreds) async -> Result<RefreshResult, String> {
+        guard let rt = creds.refreshToken, !rt.isEmpty else {
+            return .failure("no refresh token stored")
+        }
+        var req = URLRequest(url: Config.tokenURL)
+        req.httpMethod = "POST"
+        req.timeoutInterval = Config.requestTimeout
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        var body: [String: Any] = [
+            "grant_type": "refresh_token",
+            "refresh_token": rt,
+            "client_id": Config.clientID,
+        ]
+        if !creds.scopes.isEmpty { body["scope"] = creds.scopes.joined(separator: " ") }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse else { return .failure("no HTTP response") }
+            guard http.statusCode == 200 else {
+                let b = String(data: data, encoding: .utf8) ?? ""
+                return .failure("token endpoint HTTP \(http.statusCode): \(String(b.prefix(120)))")
+            }
+            guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let newAT = json["access_token"] as? String, !newAT.isEmpty else {
+                return .failure("malformed token response")
+            }
+            var expires: Date? = nil
+            if let secs = asDouble(json["expires_in"]) {
+                expires = Date(timeIntervalSinceNow: secs)
+            } else if let ms = asDouble(json["expires_at"]) {
+                expires = Date(timeIntervalSince1970: ms > 1e12 ? ms / 1000.0 : ms)
+            }
+            return .success(RefreshResult(accessToken: newAT,
+                                          refreshToken: json["refresh_token"] as? String,
+                                          expiresAt: expires))
+        } catch {
+            return .failure(error.localizedDescription)
+        }
     }
 }
 
@@ -322,21 +411,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func performFetch() {
         guard !fetching else { return }
-        switch Keychain.readClaudeCredentials() {
+        switch Keychain.read() {
         case .failure(let msg):
             setError(msg)
             scheduleNext(after: Config.refreshInterval)
             render()
         case .success(let creds):
-            if let exp = creds.expiresAt, exp < Date() {
-                setError("Token expired — run Claude Code once to refresh.")
-                scheduleNext(after: Config.refreshInterval)
-                render()
-                return
-            }
             fetching = true
             Task {
-                let result = await fetchUsage(creds)
+                let result = await self.fetchRefreshing(creds)
                 await MainActor.run {
                     self.fetching = false
                     switch result {
@@ -358,14 +441,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Fetch usage, transparently refreshing the OAuth token (and writing it back to
+    /// the Keychain) when it's expired or the API returns 401 — no manual `claude` run.
+    private func fetchRefreshing(_ initial: StoredCreds) async -> Result<Usage, UsageError> {
+        var creds = initial
+
+        func applyRefresh() async -> String? {   // returns error message, or nil on success
+            switch await Keychain.refresh(creds) {
+            case .success(let r):
+                creds.accessToken = r.accessToken
+                if let rt = r.refreshToken { creds.refreshToken = rt }
+                creds.expiresAt = r.expiresAt
+                Keychain.write(creds)             // keep Claude Code in sync (rotating tokens)
+                return nil
+            case .failure(let m):
+                return m
+            }
+        }
+
+        // Proactive refresh if the token is expired or about to expire.
+        if let exp = creds.expiresAt, exp < Date().addingTimeInterval(Config.refreshLead) {
+            if let m = await applyRefresh() {
+                return .failure(.http(401, reauthMessage(m), retryAfter: nil))
+            }
+        }
+
+        let first = await fetchUsage(Credentials(accessToken: creds.accessToken, expiresAt: creds.expiresAt))
+        if case .failure(.http(401, _, _)) = first {
+            // Access token rejected — refresh once and retry.
+            if let m = await applyRefresh() {
+                return .failure(.http(401, reauthMessage(m), retryAfter: nil))
+            }
+            return await fetchUsage(Credentials(accessToken: creds.accessToken, expiresAt: creds.expiresAt))
+        }
+        return first
+    }
+
+    private func reauthMessage(_ detail: String) -> String {
+        "Sign-in expired — run Claude Code once to re-authenticate. (\(detail))"
+    }
+
     /// Route an error to blank-bar vs keep-stale, and decide the next retry delay.
     private func handleFetchError(_ e: UsageError) {
         var msg: String
         var wait: TimeInterval
         switch e {
-        case .http(401, _, _):
-            msg = "Auth rejected (401) — run Claude Code to refresh."
-            wait = Config.refreshInterval           // a keychain re-read next cycle may fix it
+        case .http(401, let b, _):
+            msg = b.isEmpty ? "Sign-in expired — run Claude Code once to re-authenticate." : b
+            wait = Config.refreshInterval           // don't hammer; refresh already attempted
         case .http(429, _, let ra):
             msg = "Rate limited — backing off."
             wait = max(ra ?? 0, min(backoff, Config.maxBackoff))

@@ -3,6 +3,18 @@
 All notable changes to **ClaudeUsageBar** are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.1](https://github.com/kuchya/ClaudeUsageBar/releases/tag/v1.2.1) — 2026-09-12
+
+### Reverted
+- **In-app OAuth token refresh (from v1.2.0).** Writing the refreshed token back
+  into Claude Code's Keychain item required authorization on every refresh, which
+  triggered **repeated macOS Keychain permission dialogs**. The app is read-only
+  again: it reads the existing token but does not renew it. When the token expires,
+  run Claude Code once and the app recovers automatically on the next poll.
+
+### Kept
+- The launch-error `-10825` fix from v1.2.0 (pinned deployment target) is retained.
+
 ## [1.2.0](https://github.com/kuchya/ClaudeUsageBar/releases/tag/v1.2.0) — 2026-08-17
 
 ### Added

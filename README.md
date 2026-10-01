@@ -27,7 +27,9 @@ and **7-day weekly** allowance you've used — the same numbers as Claude Code's
 ## ✨ Features
 
 - **Live session + weekly percentages** right in the menu bar.
+- **Menu bar *or* notch** — toggle "Show in Notch" and the readout moves to the MacBook notch: hidden by default, **peeks on hover**, **expands** to full rows. Hidden-until-hover means it stays out of the way of notch apps like boringNotch. Falls back to a top-center pill on Macs without a notch.
 - **Inline reset countdowns** — each percentage carries its own timer (e.g. `S 91% 2h34m   W 52% 4d16h`), ticking down every minute locally.
+- **Account email & per-model/overage detail** — the menu shows which Claude account you're on, a "by surface" weekly breakdown (Claude Code / Chats / …), per-model weekly caps, and pay-per-use spend when active.
 - **Gentle on the API** — refreshes utilization every ~5 min, honours `Retry-After`, and backs off automatically if rate-limited.
 - **Always shows the last reading** — values are cached to disk, so it never blanks out; even a rate-limited cold start shows the last known numbers (with an "Updated 8m ago" freshness note).
 - **Color-coded** — green → 🟠 orange (≥70%) → 🔴 red (≥90%) so a glance is enough.

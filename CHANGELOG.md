@@ -3,6 +3,27 @@
 All notable changes to **ClaudeUsageBar** are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.0](https://github.com/kuchya/ClaudeUsageBar/releases/tag/v1.3.0) — 2026-10-01
+
+### Added
+- **Notch display mode.** A "Show in Notch" toggle moves the readout from the menu
+  bar into the MacBook notch, with a Coucou-style **hidden → peek → expanded** model:
+  invisible by default (so notch apps like boringNotch keep the idle notch), peeks on
+  hover, and expands to full Session/Weekly rows after a short dwell. Hover is detected
+  with a passive global mouse monitor (no Accessibility permission). Falls back to a
+  top-center pill on Macs without a notch. Vendored — still zero dependencies.
+- **Account email** in the menu (one-time `/api/oauth/profile` lookup, cached).
+- **Weekly breakdown by surface** (Claude Code / Chats / Cowork / …) from
+  `seven_day_breakdown`.
+- **Per-model weekly caps** parsed from the `limits[]` array (`scope.model`), shown
+  when above 0%.
+- **Pay-per-use spend** from the `spend` object, shown only when enabled or non-zero.
+- **"Copy usage data (debug)"** menu item.
+
+### Fixed
+- **Hardened timestamp parsing** for the API's microsecond-precision `+00:00`
+  reset times, keeping countdowns accurate.
+
 ## [1.2.1](https://github.com/kuchya/ClaudeUsageBar/releases/tag/v1.2.1) — 2026-09-12
 
 ### Reverted
